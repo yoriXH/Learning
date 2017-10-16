@@ -1,0 +1,177 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+package com.learn.test.learning;
+
+import com.hankcs.hanlp.HanLP;
+import com.hankcs.hanlp.seg.Segment;
+import com.hankcs.hanlp.seg.common.Term;
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.UnsupportedEncodingException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * @function 从招标文本中提取业主单位，业主联系人，联系方式
+ * @author X.H.Yang
+ */
+public class OwnerInfo {
+
+    public static HashMap<String, String> getOwnerInfo(String word) {
+        String regex_name = "(招标人|招标单位|建设单位|采购人|采购单位|业主|发布部门|招标单位名称|业主单位|项目单位|项目建设方|采购机构|邀标单位|联系科室)[\\S\\s]{0,10}?";
+        String regex_name1 = "(招标代理机构|代理机构|代理单位|名称|招标代理|采购代理机构|采购代理人)[\\S\\s]{0,10}?";
+        String regex_name2 = "受[\\S\\s]{3,20}?(委托|托付)";
+        String regex_name3 = "解释权归[\\S\\s]{3,10}?所有";
+        String regex_namelink = "(联系人|联系方式|组长|经办人|接收人|负责人)[\\S\\s]{0,5}?";
+        String regex_tellink = "(联系电话|联系人|联系方式|电话|手机|负责人)[\\S\\s]{0,20}?";
+        String regex_tel = "^(((13[0-9])|(15([0-3]|[5-9]))|(18[0,5-9]))\\d{8}|(1\\d{10}))|((0\\d{2}((-|—){0,1}?)\\d{8})|(0\\d{3}((-|—){0,1}?)\\d{7,8}))";
+        String fuhao = "[\\pP\\pS\\pN]";
+        Pattern pf = Pattern.compile(fuhao);
+        Segment segment = HanLP.newSegment().enableOrganizationRecognize(true);
+        HashMap<String, String> map = new HashMap<>();
+
+        int owner_index = 0;
+        int link_index = 0;
+        int tel_index = 0;
+
+        //提取建设单位
+        word = word.replace("*", "").replace("(", "").replace(")", "").replace("|", "");
+        word = word.replaceAll("\\pZ", "");
+        String com = "";  //建设单位
+        String link = ""; //联系人
+        String tel = "";  //联系方式
+
+        try {
+            Pattern pr2 = Pattern.compile(regex_name2);
+            Matcher mr2 = pr2.matcher(word);
+
+            Pattern pr3 = Pattern.compile(regex_name3);
+            Matcher mr3 = pr3.matcher(word);
+
+            Pattern p4 = Pattern.compile(regex_name);
+
+            if (mr2.find() && owner_index == 0) {
+                if (!pf.matcher(mr2.group()).find() && !p4.matcher(mr2.group()).find()) {
+                    owner_index = 1;
+                    com = mr2.group().replace("受", "").replace("委托", "").replace("托付", "").replace("的", "");
+                }
+            } else if (com.equals("") && mr3.find() && owner_index == 0) {
+                if (!pf.matcher(mr3.group()).find()) {
+                    owner_index = 1;
+                    com = mr3.group().replace("解释权归", "").replace("所有", "");
+                }
+            }
+
+            List<Term> termList = segment.seg(word);
+            for (int count = 0; count < termList.size(); count++) {
+                String nt = "";
+                ////////////////////////匹配词性为nt的分词是否为建设单位//////////////////////////////////
+                if (termList.get(count).nature.startsWith("nt") && owner_index == 0) {
+                    nt = "";
+                    for (int temp = count - 1; temp >= 0; temp--) {
+                        if (termList.get(temp).nature.startsWith("ns") && count - temp < 5) {
+                            for (int i = 0; i <= count - temp; i++) {
+                                nt += termList.get(temp + i).word;
+                            }
+                        }
+                        if (count - temp > 5) {
+                            break;
+                        }
+                    }
+                    if (nt.equals("")) {
+                        nt = termList.get(count).word;
+                    }
+
+                    if (pf.matcher(nt).find()) {
+                        continue;
+                    }
+
+                    Pattern p1 = Pattern.compile(regex_name + nt);
+                    Pattern p2 = Pattern.compile(regex_name1 + nt);
+                    Matcher m1 = p1.matcher(word);
+                    Matcher m2 = p2.matcher(word);
+                    if (m1.find()) {
+                        owner_index = 1;
+                        com = nt.replace("业主为", "").replace("为", "").replace("以", "");
+
+                    } else if (m2.find()) {
+                        owner_index = 1;
+                        com = nt.replace("业主为", "").replace("为", "").replace("以", "");
+                    }
+                }
+
+                ///////////////////////////以词性匹配建设单位结束///////////////////////////////////////////
+                ///////////////////////////匹配项目联系人///////////////////////////////////////////
+                if (termList.get(count).nature.startsWith("nr") && link_index == 0) {
+                    Pattern plink = Pattern.compile(regex_namelink + termList.get(count).word);
+                    Matcher mlink = plink.matcher(word);
+                    if (mlink.find()) {
+                        link_index = 1;
+                        link = termList.get(count).word;
+                        if (link.equals("先生") || link.equals("女士") || link.equals("老师")) {
+                            link = termList.get(count - 1).word + termList.get(count).word;
+                        } else if (link.length() == 1 && count + 1 < termList.size()) {
+                            link = termList.get(count).word + termList.get(count + 1).word;
+                        }
+                    }
+                }
+                ///////////////////////////以词性匹配项目联系人结束///////////////////////////////////////////
+
+                ///////////////////////////////匹配项目联系方式//////////////////////////////////////////////
+                if (termList.get(count).nature.startsWith("m") && tel_index == 0) {
+                    Pattern plink = Pattern.compile(regex_tellink + termList.get(count).word);
+                    Matcher mlink = plink.matcher(word);
+                    Pattern ptel = Pattern.compile(regex_tel);
+                    if (mlink.find()) {
+                        tel = termList.get(count).word;
+                        if (count + 2 < termList.size() && (termList.get(count + 2).nature.startsWith("m") | termList.get(count + 2).nature.startsWith("nt") | termList.get(count + 2).nature.startsWith("ns"))) {
+                            tel = termList.get(count).word + termList.get(count + 1).word + termList.get(count + 2).word;
+                        }
+                        Matcher mtel = ptel.matcher(tel);
+                        if (mtel.find() && termList.get(count).word.length() < 12) {
+                            tel_index = 1;
+                            tel = mtel.group();
+                        }
+                    }
+                }
+                ////////////////////////////////以词性匹配项目联系方式结束/////////////////////////////////////////////
+
+            }
+
+        } catch (Exception e) {
+            System.out.println(e.toString());
+        }
+        System.out.println("业主：" + com + "；联系人：" + link + "；联系方式：" + tel);
+        map.put("owner", com);
+        map.put("link", link);
+        map.put("tel", tel);
+        return map;
+
+    }
+
+    public static void main(String[] args) throws FileNotFoundException, UnsupportedEncodingException, IOException {
+//        File sampleFile = new File("C:\\Users\\Administrator\\Desktop\\招标.txt");
+        String word = " 山西省国际招标有限公司受山西省计量科学研究院委托，对山西省计量科学研究院实验室维修装修改造项目进行竞争性谈判采购,采购人：山西省计量科学研究院,详细地址：山西省太原市太原市坞城南路190号,联系人：马龙,电话：0351-7195075";
+
+        getOwnerInfo(word);
+//        if (!sampleFile.isDirectory()) {
+//            InputStream samReader = new BufferedInputStream(new FileInputStream(sampleFile));
+//            BufferedReader samBR = new BufferedReader(new InputStreamReader(samReader, "utf-8"));
+//            while ((word = samBR.readLine()) != null) {
+//                getOwnerInfo(word, segment);
+//            }
+//        }
+    }
+
+}
